@@ -2,85 +2,204 @@
 
 set -euo pipefail
 
-GOKEY_BIN="$(command -v gokey)"
-if [[ -z "$GOKEY_BIN" ]]; then
-    echo "gokey is not installed. Please install gokey to use this script."
-    echo
-    echo "Refer to: https://github.com/cloudflare/gokey"
-    exit 1
-fi
-
-COPY_BIN="$(command -v cross-copy)"
-if [[ -z "$COPY_BIN" ]]; then
-    echo "cross-copy is not installed. Please install cross-copy to use this script."
-    echo
-    echo "Refer to: https://github.com/hwhang0917/dotfiles"
-    exit 1
-fi
-
-GOKEY_CONF_DIR="$HOME/.gokey"
-if [[ ! -d "$GOKEY_CONF_DIR" ]]; then
-    echo "gokey configuration directory not found at $GOKEY_CONF_DIR. Please initialize gokey first."
-    exit 1
-fi
-
-MASTER_PASSWORD_FILE="$GOKEY_CONF_DIR/master-password"
-if [[ ! -f "$MASTER_PASSWORD_FILE" ]]; then
-    echo "Master password file not found at $MASTER_PASSWORD_FILE. Please initialize gokey first."
-    exit 1
-fi
-
-SEED_FILE="$GOKEY_CONF_DIR/seedfile"
-if [[ ! -f "$SEED_FILE" ]]; then
-    echo "Seed file not found at $SEED_FILE. Please initialize gokey first."
-    exit 1
-fi
-
-# Parse arguments
-realm=""
-length=""
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -v)
-            set -x
-            shift
-            ;;
-        -l)
-            length="$2"
-            shift 2
-            ;;
-        -*)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
-        *)
-            realm="$1"
-            shift
-            ;;
-    esac
-done
-
-# Prompt user to enter realm if not provided
-if [[ -z "$realm" ]]; then
-    read -p "Enter realm: " realm
-fi
-
-if [[ -z "$realm" ]]; then
-    echo "Error: realm cannot be empty"
-    exit 1
-fi
-
-# Build gokey command
-gokey_cmd=("$GOKEY_BIN" -P "${MASTER_PASSWORD_FILE}" -s "${SEED_FILE}" -r "$realm" -t pass)
-if [[ -n "$length" ]]; then
-    gokey_cmd+=(-l "$length")
-fi
-
-# Run gokey and pipe to cross-copy
-if "${gokey_cmd[@]}" | "$COPY_BIN"; then
-    echo "✓ Key generated and copied to clipboard for realm: $realm"
+# Colors for output (disabled if not a terminal)
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    NC='\033[0m' # No Color
 else
-    echo "✗ Failed to generate or copy key"
-    exit 1
+    RED=''
+    GREEN=''
+    YELLOW=''
+    NC=''
 fi
+
+log_error() { echo -e "${RED}✗ $1${NC}" >&2; }
+log_success() { echo -e "${GREEN}✓ $1${NC}"; }
+log_warn() { echo -e "${YELLOW}⚠ $1${NC}" >&2; }
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [REALM]
+
+Generate a password using gokey and copy it to clipboard.
+
+Options:
+    -l LENGTH   Password length (default: gokey default)
+    -v          Verbose mode (enable bash tracing)
+    -h          Show this help message
+
+Arguments:
+    REALM       The realm/identifier for the password (prompted if not provided)
+
+Configuration:
+    Requires gokey configuration in ~/.gokey/ with:
+      - master-password file
+      - seedfile
+
+Dependencies:
+    - gokey: https://github.com/cloudflare/gokey
+    - cross-copy: https://github.com/hwhang0917/dotfiles
+EOF
+}
+
+check_command() {
+    local cmd="$1"
+    local url="$2"
+
+    if ! command -v "$cmd" &>/dev/null; then
+        log_error "$cmd is not installed or not in PATH."
+        echo "Refer to: $url" >&2
+        return 1
+    fi
+}
+
+check_file() {
+    local file="$1"
+    local description="$2"
+
+    if [[ ! -f "$file" ]]; then
+        log_error "$description not found at $file"
+        echo "Please initialize gokey first." >&2
+        return 1
+    fi
+
+    if [[ ! -r "$file" ]]; then
+        log_error "$description at $file is not readable"
+        return 1
+    fi
+}
+
+check_directory() {
+    local dir="$1"
+    local description="$2"
+
+    if [[ ! -d "$dir" ]]; then
+        log_error "$description not found at $dir"
+        echo "Please initialize gokey first." >&2
+        return 1
+    fi
+}
+
+# Check dependencies
+check_dependencies() {
+    local has_errors=0
+
+    check_command "gokey" "https://github.com/cloudflare/gokey" || has_errors=1
+    check_command "cross-copy" "https://github.com/hwhang0917/dotfiles" || has_errors=1
+
+    return $has_errors
+}
+
+# Check configuration files
+check_config() {
+    local config_dir="${GOKEY_CONF_DIR:-$HOME/.gokey}"
+    local has_errors=0
+
+    check_directory "$config_dir" "gokey configuration directory" || has_errors=1
+
+    if [[ $has_errors -eq 0 ]]; then
+        check_file "$config_dir/master-password" "Master password file" || has_errors=1
+        check_file "$config_dir/seedfile" "Seed file" || has_errors=1
+    fi
+
+    return $has_errors
+}
+
+main() {
+    local realm=""
+    local length=""
+    local verbose=0
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            -v|--verbose)
+                verbose=1
+                shift
+                ;;
+            -l|--length)
+                if [[ -z "${2:-}" ]]; then
+                    log_error "Option -l requires an argument"
+                    exit 1
+                fi
+                if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                    log_error "Length must be a positive integer"
+                    exit 1
+                fi
+                length="$2"
+                shift 2
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                echo "Use -h for help" >&2
+                exit 1
+                ;;
+            *)
+                if [[ -n "$realm" ]]; then
+                    log_error "Multiple realms specified: '$realm' and '$1'"
+                    exit 1
+                fi
+                realm="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Enable verbose mode after parsing (so we don't trace arg parsing)
+    if [[ $verbose -eq 1 ]]; then
+        set -x
+    fi
+
+    # Check dependencies and configuration
+    check_dependencies || exit 1
+    check_config || exit 1
+
+    # Prompt user to enter realm if not provided
+    if [[ -z "$realm" ]]; then
+        if [[ -t 0 ]]; then
+            read -rp "Enter realm: " realm
+        else
+            log_error "Realm not provided and stdin is not a terminal"
+            exit 1
+        fi
+    fi
+
+    # Validate realm
+    realm="${realm#"${realm%%[![:space:]]*}"}"  # trim leading whitespace
+    realm="${realm%"${realm##*[![:space:]]}"}"  # trim trailing whitespace
+
+    if [[ -z "$realm" ]]; then
+        log_error "Realm cannot be empty"
+        exit 1
+    fi
+
+    # Build gokey command
+    local config_dir="${GOKEY_CONF_DIR:-$HOME/.gokey}"
+    local gokey_cmd=(
+        gokey
+        -P "$config_dir/master-password"
+        -s "$config_dir/seedfile"
+        -r "$realm"
+        -t pass
+    )
+
+    if [[ -n "$length" ]]; then
+        gokey_cmd+=(-l "$length")
+    fi
+
+    # Run gokey and pipe to cross-copy
+    if "${gokey_cmd[@]}" | cross-copy; then
+        log_success "Key generated and copied to clipboard for realm: $realm"
+    else
+        log_error "Failed to generate or copy key"
+        exit 1
+    fi
+}
+
+main "$@"
