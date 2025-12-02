@@ -9,7 +9,9 @@ FPass is a Gokey wrapper for password generation and clipboard copying.
 
 ## Installation
 
-TODO
+```bash
+curl -fsSL https://raw.githubusercontent.com/hwhang0917/fpass/refs/heads/main/install.sh | bash
+```
 
 ## Setup
 
