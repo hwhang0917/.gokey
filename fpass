@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# =============================================================================
+# fpass — convenient wrapper around Cloudflare's gokey password generator
+# Copyright (c) 2025 Heesang Whang
+#
+# Licensed under the MIT License (Expat). See the LICENSE file in this repository.
+#
+# This script depends on:
+#   • gokey     — Copyright (c) 2016 Cloudflare, Inc.
+#                 Licensed under the 3-clause BSD license.
+#                 See LICENSE-gokey.txt for the full text.
+# =============================================================================
 
 set -euo pipefail
 
